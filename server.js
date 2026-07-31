@@ -36,7 +36,6 @@ async function connectToWhatsApp() {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             console.log('Connection closed, status:', statusCode);
             
-            // If logged out or corrupt session, restart clean
             if (statusCode === DisconnectReason.loggedOut) {
                 if (fs.existsSync('baileys_auth_info')) {
                     fs.rmSync('baileys_auth_info', { recursive: true, force: true });
@@ -47,6 +46,43 @@ async function connectToWhatsApp() {
             isConnected = true;
             currentQR = '';
             console.log('\n✅ WHATSAPP IS CONNECTED & READY TO SEND UNLIMITED MESSAGES!\n');
+        }
+    });
+
+    // Incoming WhatsApp Message Webhook forwarding
+    waSock.ev.on('messages.upsert', async (m) => {
+        try {
+            if (m.type === 'notify') {
+                for (const msg of m.messages) {
+                    if (!msg.key.fromMe && msg.message) {
+                        const sender = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+                        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+                        
+                        if (text) {
+                            console.log(`[INCOMING] Message from ${sender}: ${text}`);
+                            const webhookUrl = process.env.N8N_WEBHOOK_URL;
+                            if (webhookUrl) {
+                                const fetch = (await import('node-fetch')).default;
+                                await fetch(webhookUrl, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        event: 'messages.upsert',
+                                        data: {
+                                            key: { remoteJid: msg.key.remoteJid, fromMe: false },
+                                            message: { conversation: text },
+                                            pushName: msg.pushName || 'Customer',
+                                            sender: sender
+                                        }
+                                    })
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Error forwarding incoming message:', err);
         }
     });
 }
@@ -84,7 +120,7 @@ app.get('/qr', (req, res) => {
 app.post('/send-message', async (req, res) => {
     try {
         if (!waSock || !isConnected) {
-            return res.status(500).json({ error: 'WhatsApp is not connected yet. Please scan QR code on http://localhost:3000/qr first.' });
+            return res.status(500).json({ error: 'WhatsApp is not connected yet. Please scan QR code first.' });
         }
         let { number, message } = req.body;
         if (!number || !message) {
@@ -108,7 +144,7 @@ app.post('/send-message', async (req, res) => {
 
 connectToWhatsApp();
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`WhatsApp API Server listening on port ${PORT}...`);
 });
