@@ -52,28 +52,22 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Incoming WhatsApp Message Webhook listener with clean Phone Number extraction
+    // Incoming WhatsApp Message Webhook listener
     waSock.ev.on('messages.upsert', async (m) => {
         try {
             if (m.type === 'notify') {
                 for (const msg of m.messages) {
                     if (!msg.key.fromMe && msg.message) {
                         const remoteJid = msg.key.remoteJid || '';
-                        let senderPhone = remoteJid.split('@')[0];
-                        
-                        // Handle WhatsApp LID vs real phone number
-                        if (remoteJid.includes('@lid') && msg.key.participant) {
-                            senderPhone = msg.key.participant.split('@')[0];
-                        }
-                        
+                        const sender = remoteJid.split('@')[0];
                         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
                         
                         if (text) {
-                            console.log(`[INCOMING MESSAGE] From ${senderPhone}: "${text}"`);
+                            console.log(`[INCOMING MESSAGE] From ${sender} (${remoteJid}): "${text}"`);
                             
                             const payload = {
                                 event: "messages.upsert",
-                                sender: senderPhone,
+                                sender: remoteJid, // Send full JID (supports both @s.whatsapp.net and @lid)
                                 data: {
                                     key: {
                                         remoteJid: remoteJid,
@@ -150,16 +144,25 @@ app.post('/send-message', async (req, res) => {
             return res.status(400).json({ error: 'Please provide number and message' });
         }
 
-        // Clean phone number format
-        number = number.toString().replace(/[^0-9]/g, '');
-        if (!number.startsWith('91') && number.length === 10) {
-            number = '91' + number;
+        let jid = number.toString().trim();
+        if (jid.includes('@')) {
+            // Already full JID (e.g. 55770368462953@lid or 919860663661@s.whatsapp.net)
+        } else if (jid.length > 13) {
+            // WhatsApp LID ID
+            jid = jid + '@lid';
+        } else {
+            // Standard Phone Number
+            jid = jid.replace(/[^0-9]/g, '');
+            if (!jid.startsWith('91') && jid.length === 10) {
+                jid = '91' + jid;
+            }
+            jid = jid + '@s.whatsapp.net';
         }
-        const jid = number + '@s.whatsapp.net';
 
+        console.log(`[SENDING MESSAGE] Target JID: ${jid}`);
         await waSock.sendMessage(jid, { text: message });
-        console.log(`[SUCCESS] WhatsApp Message sent to ${number}`);
-        return res.json({ status: 'success', message: `WhatsApp Message sent to ${number}` });
+        console.log(`[SUCCESS] WhatsApp Message delivered to ${jid}`);
+        return res.json({ status: 'success', message: `WhatsApp Message delivered to ${jid}` });
     } catch (err) {
         console.error('[ERROR] Failed to send message:', err);
         return res.status(500).json({ error: err.message });
