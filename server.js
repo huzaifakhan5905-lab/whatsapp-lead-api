@@ -1,7 +1,6 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 const express = require('express');
-const fs = require('fs');
 
 const app = express();
 app.use(express.json());
@@ -9,6 +8,9 @@ app.use(express.json());
 let currentQR = '';
 let isConnected = false;
 let waSock = null;
+
+const N8N_WEBHOOK_PROD = process.env.N8N_WEBHOOK_URL || 'https://huz143.app.n8n.cloud/webhook/evolution-inbound';
+const N8N_WEBHOOK_TEST = 'https://huz143.app.n8n.cloud/webhook-test/evolution-inbound';
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
@@ -37,6 +39,7 @@ async function connectToWhatsApp() {
             console.log('Connection closed, status:', statusCode);
             
             if (statusCode === DisconnectReason.loggedOut) {
+                const fs = require('fs');
                 if (fs.existsSync('baileys_auth_info')) {
                     fs.rmSync('baileys_auth_info', { recursive: true, force: true });
                 }
@@ -49,7 +52,7 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Incoming WhatsApp Message Webhook forwarding
+    // Incoming WhatsApp Message Webhook listener
     waSock.ev.on('messages.upsert', async (m) => {
         try {
             if (m.type === 'notify') {
@@ -59,30 +62,45 @@ async function connectToWhatsApp() {
                         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
                         
                         if (text) {
-                            console.log(`[INCOMING] Message from ${sender}: ${text}`);
-                            const webhookUrl = process.env.N8N_WEBHOOK_URL;
-                            if (webhookUrl) {
-                                const fetch = (await import('node-fetch')).default;
-                                await fetch(webhookUrl, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        event: 'messages.upsert',
-                                        data: {
-                                            key: { remoteJid: msg.key.remoteJid, fromMe: false },
-                                            message: { conversation: text },
-                                            pushName: msg.pushName || 'Customer',
-                                            sender: sender
-                                        }
-                                    })
-                                });
-                            }
+                            console.log(`[INCOMING MESSAGE] From ${sender}: "${text}"`);
+                            
+                            const payload = {
+                                event: "messages.upsert",
+                                sender: sender,
+                                data: {
+                                    key: {
+                                        remoteJid: msg.key.remoteJid,
+                                        fromMe: false,
+                                        id: msg.key.id
+                                    },
+                                    pushName: msg.pushName || 'Customer',
+                                    message: {
+                                        conversation: text
+                                    }
+                                }
+                            };
+
+                            const fetch = (await import('node-fetch')).default;
+                            
+                            // Send to Production Webhook
+                            fetch(N8N_WEBHOOK_PROD, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            }).catch(err => console.log('Prod Webhook response error:', err.message));
+
+                            // Send to Test Webhook
+                            fetch(N8N_WEBHOOK_TEST, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            }).catch(err => console.log('Test Webhook response error:', err.message));
                         }
                     }
                 }
             }
         } catch (err) {
-            console.error('Error forwarding incoming message:', err);
+            console.error('Error forwarding incoming WhatsApp message:', err);
         }
     });
 }
