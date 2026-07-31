@@ -67,7 +67,7 @@ async function connectToWhatsApp() {
                             
                             const payload = {
                                 event: "messages.upsert",
-                                sender: remoteJid, // Send full JID (supports both @s.whatsapp.net and @lid)
+                                sender: remoteJid,
                                 data: {
                                     key: {
                                         remoteJid: remoteJid,
@@ -144,25 +144,32 @@ app.post('/send-message', async (req, res) => {
             return res.status(400).json({ error: 'Please provide number and message' });
         }
 
-        let jid = number.toString().trim();
-        if (jid.includes('@')) {
-            // Already full JID (e.g. 55770368462953@lid or 919860663661@s.whatsapp.net)
-        } else if (jid.length > 13) {
-            // WhatsApp LID ID
-            jid = jid + '@lid';
-        } else {
-            // Standard Phone Number
-            jid = jid.replace(/[^0-9]/g, '');
-            if (!jid.startsWith('91') && jid.length === 10) {
-                jid = '91' + jid;
+        let inputNumber = number.toString().trim();
+        let targetJid = inputNumber;
+
+        // If not already full JID, resolve via onWhatsApp verification!
+        if (!inputNumber.includes('@')) {
+            let cleanDigits = inputNumber.replace(/[^0-9]/g, '');
+            if (!cleanDigits.startsWith('91') && cleanDigits.length === 10) {
+                cleanDigits = '91' + cleanDigits;
             }
-            jid = jid + '@s.whatsapp.net';
+
+            console.log(`[VERIFYING WHATSAPP NUMBER] ${cleanDigits}...`);
+            const results = await waSock.onWhatsApp(cleanDigits);
+            
+            if (results && results.length > 0 && results[0].exists) {
+                targetJid = results[0].jid;
+                console.log(`[VERIFIED WHATSAPP JID] ${targetJid}`);
+            } else {
+                console.error(`[ERROR] Number ${cleanDigits} is NOT registered on WhatsApp!`);
+                return res.status(400).json({ error: `Phone number ${cleanDigits} is NOT registered on WhatsApp!` });
+            }
         }
 
-        console.log(`[SENDING MESSAGE] Target JID: ${jid}`);
-        await waSock.sendMessage(jid, { text: message });
-        console.log(`[SUCCESS] WhatsApp Message delivered to ${jid}`);
-        return res.json({ status: 'success', message: `WhatsApp Message delivered to ${jid}` });
+        console.log(`[SENDING MESSAGE] Target JID: ${targetJid}`);
+        await waSock.sendMessage(targetJid, { text: message });
+        console.log(`[SUCCESS] WhatsApp Message delivered to ${targetJid}`);
+        return res.json({ status: 'success', message: `WhatsApp Message delivered to ${targetJid}` });
     } catch (err) {
         console.error('[ERROR] Failed to send message:', err);
         return res.status(500).json({ error: err.message });
