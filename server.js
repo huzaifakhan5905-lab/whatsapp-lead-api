@@ -52,24 +52,31 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Incoming WhatsApp Message Webhook listener
+    // Incoming WhatsApp Message Webhook listener with clean Phone Number extraction
     waSock.ev.on('messages.upsert', async (m) => {
         try {
             if (m.type === 'notify') {
                 for (const msg of m.messages) {
                     if (!msg.key.fromMe && msg.message) {
-                        const sender = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+                        const remoteJid = msg.key.remoteJid || '';
+                        let senderPhone = remoteJid.split('@')[0];
+                        
+                        // Handle WhatsApp LID vs real phone number
+                        if (remoteJid.includes('@lid') && msg.key.participant) {
+                            senderPhone = msg.key.participant.split('@')[0];
+                        }
+                        
                         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
                         
                         if (text) {
-                            console.log(`[INCOMING MESSAGE] From ${sender}: "${text}"`);
+                            console.log(`[INCOMING MESSAGE] From ${senderPhone}: "${text}"`);
                             
                             const payload = {
                                 event: "messages.upsert",
-                                sender: sender,
+                                sender: senderPhone,
                                 data: {
                                     key: {
-                                        remoteJid: msg.key.remoteJid,
+                                        remoteJid: remoteJid,
                                         fromMe: false,
                                         id: msg.key.id
                                     },
@@ -82,19 +89,17 @@ async function connectToWhatsApp() {
 
                             const fetch = (await import('node-fetch')).default;
                             
-                            // Send to Production Webhook
                             fetch(N8N_WEBHOOK_PROD, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(payload)
-                            }).catch(err => console.log('Prod Webhook response error:', err.message));
+                            }).catch(err => console.log('Prod Webhook error:', err.message));
 
-                            // Send to Test Webhook
                             fetch(N8N_WEBHOOK_TEST, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(payload)
-                            }).catch(err => console.log('Test Webhook response error:', err.message));
+                            }).catch(err => console.log('Test Webhook error:', err.message));
                         }
                     }
                 }
@@ -145,6 +150,7 @@ app.post('/send-message', async (req, res) => {
             return res.status(400).json({ error: 'Please provide number and message' });
         }
 
+        // Clean phone number format
         number = number.toString().replace(/[^0-9]/g, '');
         if (!number.startsWith('91') && number.length === 10) {
             number = '91' + number;
